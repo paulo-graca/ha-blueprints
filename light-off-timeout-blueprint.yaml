@@ -1,0 +1,61 @@
+blueprint:
+  name: Turn off light after X time
+  description: >
+    Automatically turns off a light (or group of lights) after it has been
+    on for a configurable amount of time. If the light is turned off
+    manually before the timer ends, the timer is cancelled. If the light
+    turns on again, the timer restarts (thanks to this automation's
+    "restart" mode).
+  domain: automation
+  source_url: https://github.com/home-assistant/core
+  input:
+    light_target:
+      name: Light(s) to control
+      description: Choose the light, group, or entity that should be turned off.
+      selector:
+        target:
+          entity:
+            domain: light
+
+    delay_time:
+      name: Time until turn off
+      description: How long the light stays on before being automatically turned off.
+      default:
+        minutes: 10
+      selector:
+        duration: {}
+
+    trigger_entity:
+      name: Entity to monitor (optional)
+      description: >
+        By default, the chosen light itself is monitored. Only set this if
+        you want the timer to start based on a different entity (e.g. a
+        motion sensor) instead of the light's "on" state.
+      default: []
+      selector:
+        entity:
+          multiple: true
+
+mode: restart
+max_exceeded: silent
+
+trigger:
+  - platform: state
+    entity_id: !input trigger_entity
+    to: "on"
+  - platform: state
+    entity_id: !input light_target
+    to: "on"
+
+condition: []
+
+action:
+  - delay: !input delay_time
+  # Safety check: only turn off if the light is still on
+  # (avoids re-triggering an already-off light and avoids overriding
+  # a manual toggle that happened right at the edge of the delay)
+  - condition: state
+    entity_id: !input light_target
+    state: "on"
+  - service: light.turn_off
+    target: !input light_target
