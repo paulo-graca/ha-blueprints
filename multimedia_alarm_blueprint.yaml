@@ -1,0 +1,189 @@
+blueprint:
+  name: Robust Multimedia Alarm (cascading fallback)
+  description: >-
+    Plays a media (radio, playlist, local music, etc.) on a media_player at
+    a defined time, subject to blocking conditions (e.g. holidays), with
+    REAL verification of the "playing" state and cascading fallback: tries
+    the primary media, if playback isn't confirmed within the defined time
+    it runs a fallback action of your choice, and finally ALWAYS activates
+    a safety scene if nothing worked.
+
+    Designed to replace automations with multiple parallel branches and
+    state conditions (idle/buffering/unavailable/off) with a single
+    sequential, predictable, easy-to-debug flow.
+  domain: automation
+  input:
+    alarm_time:
+      name: Alarm time
+      description: input_datetime entity that defines the trigger time.
+      selector:
+        entity:
+          domain: input_datetime
+
+    block_conditions:
+      name: Blocking conditions (optional)
+      description: >-
+        Conditions that must be true for the alarm to play
+        (e.g. schedule.work_period = on, input_boolean.holiday = off).
+        Leave empty for no condition at all.
+      default: []
+      selector:
+        condition: {}
+
+    media_player_entity:
+      name: Primary media player
+      selector:
+        entity:
+          domain: media_player
+
+    primary_media_content_id:
+      name: Primary content — media_content_id
+      description: >-
+        E.g. media-source://radio_browser/44cb20dc-e9ac-41ef-a4fe-153d48fcdd96
+        or https://stream-icy.bauermedia.pt/comercial.aac
+      selector:
+        text: {}
+
+    primary_media_content_type:
+      name: Primary content — media_content_type
+      default: music
+      selector:
+        text: {}
+
+    volume:
+      name: Volume
+      default: 0.05
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.01
+          mode: slider
+
+    verification_timeout:
+      name: Primary verification time (seconds)
+      description: >-
+        How long to wait, after issuing the play command, to confirm the
+        media player is actually "playing" before triggering the fallback.
+      default: 20
+      selector:
+        number:
+          min: 5
+          max: 120
+          unit_of_measurement: s
+
+    fallback_action:
+      name: Fallback action (optional)
+      description: >-
+        Sequence to run IF the primary media doesn't confirm playback
+        within the verification time (e.g. try another integration like
+        Music Assistant, another media_player, another stream). You can
+        put as many steps as you want here, including your own internal
+        choose logic.
+      default: []
+      selector:
+        action: {}
+
+    fallback_verification_timeout:
+      name: Fallback verification time (seconds)
+      default: 20
+      selector:
+        number:
+          min: 5
+          max: 120
+          unit_of_measurement: s
+
+    guaranteed_scene:
+      name: Guaranteed (safety net) scene
+      description: >-
+        Scene ALWAYS activated at the end if, after all attempts, the media
+        player still isn't playing. This is the final safety net — it's
+        recommended that it depend as little as possible on external
+        services (e.g. play a local file instead of another web stream).
+      selector:
+        entity:
+          domain: scene
+
+    pre_actions:
+      name: Actions before the alarm (optional)
+      description: E.g. turn on a switch before starting playback.
+      default: []
+      selector:
+        action: {}
+
+    post_wait_minutes:
+      name: Wait before final routine (minutes)
+      default: 60
+      selector:
+        number:
+          min: 0
+          max: 180
+
+    post_actions:
+      name: Final routine (optional)
+      description: E.g. activate a "good morning" scene, pause the media, turn off the switch.
+      default: []
+      selector:
+        action: {}
+
+trigger:
+  - trigger: time
+    at: !input alarm_time
+
+condition: !input block_conditions
+
+action:
+  - variables:
+      media_player_entity: !input media_player_entity
+
+  - choose: []
+    default: !input pre_actions
+
+  - action: media_player.volume_set
+    target:
+      entity_id: !input media_player_entity
+    data:
+      volume_level: !input volume
+    continue_on_error: true
+
+  - action: media_player.play_media
+    target:
+      entity_id: !input media_player_entity
+    data:
+      media_content_id: !input primary_media_content_id
+      media_content_type: !input primary_media_content_type
+    continue_on_error: true
+
+  - wait_template: "{{ is_state(media_player_entity, 'playing') }}"
+    timeout:
+      seconds: !input verification_timeout
+    continue_on_timeout: true
+
+  - if:
+      - condition: template
+        value_template: "{{ not is_state(media_player_entity, 'playing') }}"
+    then:
+      - choose: []
+        default: !input fallback_action
+
+      - wait_template: "{{ is_state(media_player_entity, 'playing') }}"
+        timeout:
+          seconds: !input fallback_verification_timeout
+        continue_on_timeout: true
+
+  - if:
+      - condition: template
+        value_template: "{{ not is_state(media_player_entity, 'playing') }}"
+    then:
+      - action: scene.turn_on
+        target:
+          entity_id: !input guaranteed_scene
+
+  - delay:
+      minutes: !input post_wait_minutes
+
+  - choose: []
+    default: !input post_actions
+
+mode: single
+max_exceeded: silent
